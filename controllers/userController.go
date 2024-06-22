@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/go-playground/validator/v10"
+	"github.com/go-playground/validator"
+	"github.com/ramyasreetejo/jwt-authentication-golang/contextKeys"
 	"github.com/ramyasreetejo/jwt-authentication-golang/database"
 	"github.com/ramyasreetejo/jwt-authentication-golang/helpers"
 	"github.com/ramyasreetejo/jwt-authentication-golang/models"
@@ -20,6 +22,7 @@ import (
 )
 
 var userCollection *mongo.Collection = database.OpenCollection(database.Client, "user")
+
 var validate = validator.New()
 
 func HashPassword(password string) string {
@@ -35,7 +38,7 @@ func VerifyPassword(userPassword string, providedPassword string) (bool, string)
 	check := true
 	msg := ""
 	if err != nil {
-		msg = "email of password is incorrect"
+		msg = "password is incorrect for the given email"
 		check = false
 	}
 	return check, msg
@@ -98,6 +101,12 @@ func Signup(w http.ResponseWriter, r *http.Request) {
 
 	// Write response
 	w.Header().Set("Content-Type", "application/json")
+	cookie := &http.Cookie{
+		Name:  "token",
+		Value: *user.Token,
+	}
+	// Set the cookie in the response
+	http.SetCookie(w, cookie)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resultInsertionNumber)
 }
@@ -106,32 +115,35 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	// fmt.Fprintf(w, "hi, loggedin")
 	var ctx, cancel = context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
-	var user models.User
+	var loginDetails models.LoginDetails
 	var foundUser models.User
 
-	err := json.NewDecoder(r.Body).Decode(&user)
+	err := json.NewDecoder(r.Body).Decode(&loginDetails)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	err = userCollection.FindOne(ctx, bson.M{"email": user.Email}).Decode(&foundUser)
+	validationErr := validate.Struct(loginDetails)
+	if validationErr != nil {
+		http.Error(w, validationErr.Error(), http.StatusBadRequest)
+		return
+	}
+
+	err = userCollection.FindOne(ctx, bson.M{"email": loginDetails.Email}).Decode(&foundUser)
 	if err != nil {
 		http.Error(w, "error: email doesn't exist in db", http.StatusBadRequest)
 		return
 	}
 
-	passwordIsValid, msg := VerifyPassword(*user.Password, *foundUser.Password)
+	passwordIsValid, msg := VerifyPassword(*loginDetails.Password, *foundUser.Password)
 	if !passwordIsValid {
-		http.Error(w, "error: "+msg, http.StatusInternalServerError)
+		http.Error(w, "error: "+msg, http.StatusUnauthorized)
 		return
 	}
 
-	if foundUser.Email == nil {
-		http.Error(w, "error: user not found", http.StatusInternalServerError)
-	}
 	token, refreshToken, _ := helpers.GenerateAllTokens(*foundUser.Email, *foundUser.First_name, *foundUser.Last_name, *foundUser.User_type, foundUser.User_id)
-	helpers.UpdateAllTokens(token, refreshToken, foundUser.User_id)
+	helpers.UpdateAllTokensToDB(token, refreshToken, foundUser.User_id)
 	err = userCollection.FindOne(ctx, bson.M{"user_id": foundUser.User_id}).Decode(&foundUser)
 
 	if err != nil {
@@ -140,42 +152,39 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write response
-	w.WriteHeader(http.StatusOK)
+
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Printf(*foundUser.Token)
-	http.SetCookie(w, &http.Cookie{
+	cookie := &http.Cookie{
 		Name:  "token",
-		Value: "val",
-	})
-	// http.SetCookie(w, &http.Cookie{
-	// 	Name:    "token",
-	// 	Value:   *foundUser.Token,
-	// 	Expires: time.Now().Add(24 * time.Hour),
-	// 	Path:    "/users/login", // Set the path to match your API endpoint
-	// 	Domain:  "localhost",    // Set the domain to match your API domain
-	// })
+		Value: *foundUser.Token,
+	}
+	// Set the cookie in the response
+	http.SetCookie(w, cookie)
+	w.WriteHeader(http.StatusOK)
+	// Write a response to the client
 	json.NewEncoder(w).Encode(foundUser)
 }
 
 func GetUsers(w http.ResponseWriter, r *http.Request) {
 	// Access user information from request context
-	email := r.Context().Value("email").(string)
-	firstName := r.Context().Value("first_name").(string)
-	lastName := r.Context().Value("last_name").(string)
-	uid := r.Context().Value("uid").(string)
-	userType := r.Context().Value("user_type").(string)
+	ctx := r.Context()
+	email := ctx.Value(contextKeys.ContextKey("email")).(string)
+	firstName := ctx.Value(contextKeys.ContextKey("first_name")).(string)
+	lastName := ctx.Value(contextKeys.ContextKey("last_name")).(string)
+	userId := ctx.Value(contextKeys.ContextKey("user_id")).(string)
+	userType := ctx.Value(contextKeys.ContextKey("user_type")).(string)
 
-	// Use user information for further processing
-	fmt.Fprintf(w, "Authenticated User: %s (%s %s), UID: %s, User Type: %s", email, firstName, lastName, uid, userType)
+	// Use user information to log
+	fmt.Printf("Authenticated User: %s (%s %s), User Id: %s, User Type: %s\n", email, firstName, lastName, userId, userType)
 
 	// If user type is not ADMIN, return an error
-	if err := helpers.CheckUserType(r, "ADMIN"); err != nil {
+	if err := helpers.CheckUserType(r); err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
 	// Set up context and cancellation function
-	var ctx, cancel = context.WithTimeout(r.Context(), 100*time.Second)
+	var ctx_new, cancel = context.WithTimeout(context.Background(), 100*time.Second)
 	defer cancel()
 
 	// Parse query parameters for pagination
@@ -210,7 +219,7 @@ func GetUsers(w http.ResponseWriter, r *http.Request) {
 			{Key: "user_items", Value: bson.D{{Key: "$slice", Value: []interface{}{"$data", startIndex, recordPerPage}}}}}}}
 
 	// Perform aggregation query
-	result, err := userCollection.Aggregate(ctx, mongo.Pipeline{
+	result, err := userCollection.Aggregate(ctx_new, mongo.Pipeline{
 		matchStage, groupStage, projectStage})
 	if err != nil {
 		http.Error(w, "error: error occured while listing user items", http.StatusInternalServerError)
@@ -219,7 +228,7 @@ func GetUsers(w http.ResponseWriter, r *http.Request) {
 
 	// Extract results
 	var allusers []bson.M
-	if err = result.All(ctx, &allusers); err != nil {
+	if err = result.All(ctx_new, &allusers); err != nil {
 		log.Fatal(err)
 	}
 
@@ -230,27 +239,38 @@ func GetUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetUser(w http.ResponseWriter, r *http.Request) {
+
+	var userIdFromURL string
+
+	path := strings.TrimPrefix(r.URL.Path, "/users/")
+	pathSegments := strings.Split(path, "/")
+	if len(pathSegments) > 0 && pathSegments[0] != "" {
+		userIdFromURL = pathSegments[0]
+		fmt.Printf("User ID from URL, whose details to be fetched: %s\n", userIdFromURL)
+	} else {
+		http.Error(w, "User ID, whose details to be fetched is not found in the URL/Route", http.StatusBadRequest)
+		return
+	}
+
 	// Access user information from request context
-	email := r.Context().Value("email").(string)
-	firstName := r.Context().Value("first_name").(string)
-	lastName := r.Context().Value("last_name").(string)
-	uid := r.Context().Value("uid").(string)
-	userType := r.Context().Value("user_type").(string)
+	ctx := r.Context()
+	email := ctx.Value(contextKeys.ContextKey("email")).(string)
+	firstName := ctx.Value(contextKeys.ContextKey("first_name")).(string)
+	lastName := ctx.Value(contextKeys.ContextKey("last_name")).(string)
+	userId := ctx.Value(contextKeys.ContextKey("user_id")).(string)
+	userType := ctx.Value(contextKeys.ContextKey("user_type")).(string)
 
-	// Use user information for further processing
-	fmt.Fprintf(w, "Authenticated User: %s (%s %s), UID: %s, User Type: %s", email, firstName, lastName, uid, userType)
+	// Use user information to log
+	fmt.Printf("Authenticated User: %s (%s %s), User Id: %s, User Type: %s\n", email, firstName, lastName, userId, userType)
 
-	userId := r.Context().Value("user_id").(string)
-
-	if err := helpers.MatchUserTypeToUid(r, userId); err != nil {
+	// Check if user_type is "ADMIN", if its "USER", they cant access this route unless the user logged in trying to access his details itself!
+	if err := helpers.CheckUserTypeAndMatchUserIdFromURLToToken(r, userIdFromURL); err != nil {
 		http.Error(w, "error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	var ctx, cancel = context.WithTimeout(r.Context(), 100*time.Second)
 
 	var user models.User
-	err := userCollection.FindOne(ctx, bson.M{"user_id": userId}).Decode(&user)
-	defer cancel()
+	err := userCollection.FindOne(context.Background(), bson.M{"user_id": userIdFromURL}).Decode(&user)
 	if err != nil {
 		http.Error(w, "error: "+err.Error(), http.StatusInternalServerError)
 		return

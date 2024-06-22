@@ -7,6 +7,6 @@ import (
 )
 
 func AuthRoutes(incomingRoutes *http.ServeMux) {
-	incomingRoutes.HandleFunc("/users/signup", controller.Signup)
-	incomingRoutes.HandleFunc("/users/login", controller.Login)
+	incomingRoutes.HandleFunc("/users/signup", controller.Signup) //post
+	incomingRoutes.HandleFunc("/users/login", controller.Login)   //post
 }

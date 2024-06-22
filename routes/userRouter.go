@@ -8,6 +8,6 @@ import (
 )
 
 func UserRoutes(incomingRoutes *http.ServeMux) {
-	incomingRoutes.HandleFunc("/users", middleware.Authenticate(controller.GetUsers))
-	incomingRoutes.HandleFunc("/users/:user_id", middleware.Authenticate(controller.GetUser))
+	incomingRoutes.HandleFunc("/users", middleware.Authenticate(controller.GetUsers)) //get
+	incomingRoutes.HandleFunc("/users/", middleware.Authenticate(controller.GetUser)) //get
 }

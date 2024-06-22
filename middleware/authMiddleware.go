@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/ramyasreetejo/jwt-authentication-golang/contextKeys"
 	"github.com/ramyasreetejo/jwt-authentication-golang/helpers"
 )
 
@@ -33,20 +34,13 @@ func Authenticate(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		type contextKey string
-		const emailKey contextKey = "email"
-		const first_nameKey contextKey = "first_name"
-		const last_nameKey contextKey = "last_name"
-		const uidKey contextKey = "uid"
-		const user_typeKey contextKey = "user_type"
-
 		// Set user information in request context
-		ctx := r.Context()
-		ctx = context.WithValue(ctx, emailKey, claims.Email)
-		ctx = context.WithValue(ctx, first_nameKey, claims.First_name)
-		ctx = context.WithValue(ctx, last_nameKey, claims.Last_name)
-		ctx = context.WithValue(ctx, uidKey, claims.Uid)
-		ctx = context.WithValue(ctx, user_typeKey, claims.User_type)
+		ctx := context.Background()
+		ctx = context.WithValue(ctx, contextKeys.EmailKey, claims.Email)
+		ctx = context.WithValue(ctx, contextKeys.FirstNameKey, claims.First_name)
+		ctx = context.WithValue(ctx, contextKeys.LastNameKey, claims.Last_name)
+		ctx = context.WithValue(ctx, contextKeys.UserIDKey, claims.User_id)
+		ctx = context.WithValue(ctx, contextKeys.UserTypeKey, claims.User_type)
 
 		// Call the next handler
 		next.ServeHTTP(w, r.WithContext(ctx))

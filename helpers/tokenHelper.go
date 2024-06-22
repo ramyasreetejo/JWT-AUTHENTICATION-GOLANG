@@ -19,12 +19,12 @@ var userCollection *mongo.Collection = database.OpenCollection(database.Client, 
 
 var SECRET_KEY string = os.Getenv("SECRET_KEY")
 
-func GenerateAllTokens(email string, firstName string, lastName string, userType string, uid string) (signedToken string, signedRefreshToken string, err error) {
+func GenerateAllTokens(email string, firstName string, lastName string, userType string, userId string) (signedToken string, signedRefreshToken string, err error) {
 	claims := &models.SignedDetails{
 		Email:      email,
 		First_name: firstName,
 		Last_name:  lastName,
-		Uid:        uid,
+		User_id:    userId,
 		User_type:  userType,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: time.Now().Local().Add(time.Hour * time.Duration(24)).Unix(),
@@ -32,6 +32,11 @@ func GenerateAllTokens(email string, firstName string, lastName string, userType
 	}
 
 	refreshClaims := &models.SignedDetails{
+		Email:      email,
+		First_name: firstName,
+		Last_name:  lastName,
+		User_id:    userId,
+		User_type:  userType,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: time.Now().Local().Add(time.Hour * time.Duration(168)).Unix(),
 		},
@@ -53,6 +58,7 @@ func GenerateAllTokens(email string, firstName string, lastName string, userType
 }
 
 func ValidateToken(signedToken string) (claims *models.SignedDetails, msg string) {
+	// Parse the token with the expected claims type
 	token, err := jwt.ParseWithClaims(
 		signedToken,
 		&models.SignedDetails{},
@@ -61,25 +67,29 @@ func ValidateToken(signedToken string) (claims *models.SignedDetails, msg string
 		},
 	)
 
+	// Handle any parsing errors
 	if err != nil {
 		msg = err.Error()
-		return
+		return nil, msg
 	}
 
+	// Perform a type assertion to check if the token claims match the expected type
+	// to check Structure Mismatch, Token Tampering, Different Issuer and Malformed Token
 	claims, ok := token.Claims.(*models.SignedDetails)
 	if !ok {
 		msg = "the token is invalid"
-		return
+		return nil, msg
 	}
 
+	// Check if token is expired
 	if claims.ExpiresAt < time.Now().Local().Unix() {
 		msg = "token is expired"
-		return
+		return nil, msg
 	}
-	return claims, msg
+	return claims, ""
 }
 
-func UpdateAllTokens(signedToken string, signedRefreshToken string, userId string) {
+func UpdateAllTokensToDB(signedToken string, signedRefreshToken string, userId string) {
 	var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
 
 	var updateObj primitive.D
